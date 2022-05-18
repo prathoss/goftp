@@ -1,8 +1,8 @@
 package types
 
 const (
-	TypeFile = iota
-	TypeDirectory
+	TypeDirectory = iota
+	TypeFile
 	TypeLink
 )
 

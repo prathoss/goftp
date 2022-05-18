@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"sort"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/prathoss/goftp/pkg"
@@ -137,6 +138,14 @@ func (m *FileListModel) move(newLocation string) error {
 	if err != nil {
 		return err
 	}
+	sort.Slice(newEntries, func(i, j int) bool {
+		ei := newEntries[i]
+		ej := newEntries[j]
+		if ei.Type != ej.Type {
+			return ei.Type < ej.Type
+		}
+		return ei.Name < ej.Name
+	})
 	m.reset()
 	m.entries = newEntries
 	m.location = newLocation
