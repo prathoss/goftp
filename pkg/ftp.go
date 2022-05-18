@@ -14,31 +14,43 @@ import (
 func PrepareDownloadFn(client *ftp.ServerConn) func(string, []types.Entry, string) error {
 	return func(root string, entries []types.Entry, destination string) error {
 		for _, entry := range entries {
-			absoluteSourcePath := path.Join(root, entry.Name)
-			err := func() error {
-				if entry.Type == types.TypeDirectory {
-					walker := client.Walk(absoluteSourcePath)
-					for walker.Next() {
-						if walker.Stat().Type != ftp.EntryTypeFile {
-							continue
-						}
-						// TODO: finish implementation
-						//  * check if directory is created
-						// downloadFile(client)
-					}
-					return nil
-				}
-				if err := downloadFile(client, absoluteSourcePath, path.Join(destination, entry.Name)); err != nil {
+			if entry.Type == types.TypeDirectory {
+				if err := downloadFolderWithContents(client, root, destination, entry); err != nil {
 					return err
 				}
-				return nil
-			}()
-			if err != nil {
+				continue
+			}
+			if err := downloadFile(client, path.Join(root, entry.Name), path.Join(destination, entry.Name)); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
+}
+
+func downloadFolderWithContents(client *ftp.ServerConn, root, destination string, entry types.Entry) error {
+	if err := createDirIfNotExist(path.Join(destination, entry.Name)); err != nil {
+		return err
+	}
+	walker := client.Walk(path.Join(root, entry.Name))
+	for walker.Next() {
+		// get relative path => walk prints absolute path when called with absolute
+		rel, err := filepath.Rel(root, walker.Path())
+		if err != nil {
+			return err
+		}
+		destinationAbs := path.Join(destination, rel)
+		if walker.Stat().Type == ftp.EntryTypeFolder {
+			if err := createDirIfNotExist(destinationAbs); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := downloadFile(client, walker.Path(), destinationAbs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func downloadFile(c *ftp.ServerConn, source, destination string) error {
@@ -47,7 +59,7 @@ func downloadFile(c *ftp.ServerConn, source, destination string) error {
 		return err
 	}
 	defer result.Close()
-	fl, err := os.OpenFile(destination, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	fl, err := os.OpenFile(destination, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
 	if err != nil {
 		return err
 	}
@@ -64,35 +76,40 @@ func downloadFile(c *ftp.ServerConn, source, destination string) error {
 func PrepareUploadFn(client *ftp.ServerConn) func(string, []types.Entry, string) error {
 	return func(root string, entries []types.Entry, destination string) error {
 		for _, entry := range entries {
-			absoluteSourcePath := path.Join(root, entry.Name)
-			err := func() error {
-				if entry.Type == types.TypeDirectory {
-					return filepath.Walk(
-						absoluteSourcePath,
-						func(path string, info fs.FileInfo, err error) error {
-							if err != nil {
-								return err
-							}
-							if info.IsDir() {
-								return nil
-							}
-							// TODO: finish implementation
-							//  * check if directory is created
-							// uploadFile(client)
-							return nil
-						})
-				}
-				if err := uploadFile(client, absoluteSourcePath, path.Join(destination, entry.Name)); err != nil {
+			// func to properly handle defer
+			if entry.Type == types.TypeDirectory {
+				if err := uploadDirWithContent(client, root, destination, entry); err != nil {
 					return err
 				}
-				return nil
-			}()
-			if err != nil {
+				continue
+			}
+			if err := uploadFile(client, path.Join(root, entry.Name), path.Join(destination, entry.Name)); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
+}
+
+func uploadDirWithContent(client *ftp.ServerConn, root, destination string, entry types.Entry) error {
+	return filepath.Walk(
+		path.Join(root, entry.Name),
+		// dir walker func
+		func(walkPath string, info fs.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, err := filepath.Rel(root, walkPath)
+			if err != nil {
+				return err
+			}
+			destinationAbs := path.Join(destination, rel)
+			if info.IsDir() {
+				return client.MakeDir(destinationAbs)
+			}
+			// walkPath will be asbolute => remove root to make destination
+			return uploadFile(client, walkPath, destinationAbs)
+		})
 }
 
 func uploadFile(c *ftp.ServerConn, source, destination string) error {

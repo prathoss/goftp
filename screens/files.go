@@ -136,15 +136,9 @@ func (m filesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.source.ToggleSelection()
 		case key.Matches(msg, fKeys.Delete):
 			return initConfirmation(fmt.Sprintf("Realy want to delete %d files", m.source.GetSelectedCount()),
-				m,
+				&m,
 				nil,
-				func() error {
-					err := m.source.Delete()
-					if err != nil {
-						return err
-					}
-					return nil
-				},
+				m.source.Delete,
 				func() {
 					_ = m.ftpClient.Quit()
 				},

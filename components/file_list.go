@@ -62,14 +62,10 @@ type deleteFn func(location string, entries []types.Entry) error
 var ErrNotSet = errors.New("function not set")
 
 func InitFileListModel(name, location string, listFn listFn, transferFn transferFn, deleteFn deleteFn) (FileListModel, error) {
-	entries, err := listFn(location)
-	if err != nil {
-		return FileListModel{}, err
-	}
-	return FileListModel{
+	flm := FileListModel{
 		name:         name,
 		location:     location,
-		entries:      entries,
+		entries:      []types.Entry{},
 		cursor:       0,
 		selected:     map[int]string{},
 		listFn:       listFn,
@@ -77,7 +73,11 @@ func InitFileListModel(name, location string, listFn listFn, transferFn transfer
 		itemsInVew:   10,
 		transferFn:   transferFn,
 		deleteFn:     deleteFn,
-	}, nil
+	}
+	if err := flm.Refresh(); err != nil {
+		return FileListModel{}, err
+	}
+	return flm, nil
 }
 
 func (m *FileListModel) Up() {
@@ -101,6 +101,9 @@ func (m *FileListModel) Down() {
 }
 
 func (m *FileListModel) ToggleSelection() {
+	if len(m.entries) == 0 {
+		return
+	}
 	if _, exists := m.selected[m.cursor]; exists {
 		delete(m.selected, m.cursor)
 	} else {
@@ -109,6 +112,9 @@ func (m *FileListModel) ToggleSelection() {
 }
 
 func (m *FileListModel) Enter() error {
+	if len(m.entries) == 0 {
+		return nil
+	}
 	selectedEntry := m.entries[m.cursor].Name
 	newLocation := path.Join(m.location, selectedEntry)
 	return m.move(newLocation)
@@ -124,6 +130,9 @@ func (m *FileListModel) Refresh() error {
 }
 
 func (m *FileListModel) move(newLocation string) error {
+	if m.listFn == nil {
+		return nil
+	}
 	newEntries, err := m.listFn(newLocation)
 	if err != nil {
 		return err
@@ -159,12 +168,18 @@ func (m FileListModel) Transfer(destination string) error {
 		return fmt.Errorf("transfer %w", ErrNotSet)
 	}
 	selected := m.getAllSelected()
+	if len(selected) == 0 {
+		return nil
+	}
 	return m.transferFn(m.location, selected, destination)
 }
 
 func (m *FileListModel) Delete() error {
 	if m.deleteFn == nil {
 		return fmt.Errorf("delete %w", ErrNotSet)
+	}
+	if len(m.entries) == 0 {
+		return nil
 	}
 	if err := m.deleteFn(m.location, m.getAllSelected()); err != nil {
 		return err

@@ -1,6 +1,8 @@
 package pkg
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path"
 
@@ -20,6 +22,13 @@ func OsDeleteFn(location string, entries []types.Entry) error {
 		if err := delFn(absolutePath); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func createDirIfNotExist(path string) error {
+	if err := os.Mkdir(path, 0750); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
 	}
 	return nil
 }
