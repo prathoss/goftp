@@ -32,3 +32,20 @@ func createDirIfNotExist(path string) error {
 	}
 	return nil
 }
+
+func OsToEntry(d os.DirEntry) types.Entry {
+	var tp int
+	switch {
+	case d.IsDir():
+		tp = types.TypeDirectory
+	default:
+		tp = types.TypeFile
+	}
+
+	info, _ := d.Info()
+	return types.Entry{
+		Name: d.Name(),
+		Type: tp,
+		Size: uint64(info.Size()),
+	}
+}

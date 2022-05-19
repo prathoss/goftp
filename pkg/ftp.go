@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/jlaffaye/ftp"
 	"github.com/prathoss/goftp/types"
@@ -149,5 +150,42 @@ func PrepareFtpDeleteFn(client *ftp.ServerConn) func(location string, entries []
 			}
 		}
 		return nil
+	}
+}
+
+func KeepFtpAlive(client *ftp.ServerConn) (chan<- struct{}, <-chan error) {
+	ticker := time.NewTimer(15 * time.Second)
+	quit := make(chan struct{})
+	errChan := make(chan error)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if err := client.NoOp(); err != nil {
+					errChan <- err
+					return
+				}
+			case <-quit:
+				return
+			}
+		}
+	}()
+	return quit, errChan
+}
+
+func FtpToEntry(f *ftp.Entry) types.Entry {
+	var tp int
+	switch f.Type {
+	case ftp.EntryTypeFile:
+		tp = types.TypeFile
+	case ftp.EntryTypeLink:
+		tp = types.TypeLink
+	case ftp.EntryTypeFolder:
+		tp = types.TypeDirectory
+	}
+	return types.Entry{
+		Name: f.Name,
+		Type: tp,
+		Size: f.Size,
 	}
 }

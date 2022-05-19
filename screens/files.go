@@ -15,10 +15,17 @@ import (
 	"github.com/prathoss/goftp/types"
 )
 
+type ftpModel struct {
+	client             *ftp.ServerConn
+	keepAliveQuitChan  chan<- struct{}
+	keepAliveErrorChan <-chan error
+	ftpAliveError      error
+}
+
 type filesModel struct {
 	source      components.FileListModel
 	destination components.FileListModel
-	ftpClient   *ftp.ServerConn
+	ftpModel    *ftpModel
 }
 
 func initFiles(server string, port int, user, passwd string) (tea.Model, error) {
@@ -31,27 +38,22 @@ func initFiles(server string, port int, user, passwd string) (tea.Model, error) 
 	if err != nil {
 		return nil, err
 	}
+	ftpKeepAliveQuit, ftpKeepAliveError := pkg.KeepFtpAlive(c)
+	ftpModel := &ftpModel{
+		client:             c,
+		keepAliveQuitChan:  ftpKeepAliveQuit,
+		keepAliveErrorChan: ftpKeepAliveError,
+	}
+	// listen for possible error from keeping ftp alive
+	go func() {
+		ftpModel.ftpAliveError = <-ftpKeepAliveError
+	}()
 	serverList, err := components.InitFileListModelBuilder(server, "/", func(location string) ([]types.Entry, error) {
 		files, err := c.List(location)
 		if err != nil {
 			return nil, err
 		}
-		return pkg.MapSlice(files, func(f *ftp.Entry) types.Entry {
-			var tp int
-			switch f.Type {
-			case ftp.EntryTypeFile:
-				tp = types.TypeFile
-			case ftp.EntryTypeLink:
-				tp = types.TypeLink
-			case ftp.EntryTypeFolder:
-				tp = types.TypeDirectory
-			}
-			return types.Entry{
-				Name: f.Name,
-				Type: tp,
-				Size: f.Size,
-			}
-		}), nil
+		return pkg.MapSlice(files, pkg.FtpToEntry), nil
 	}).
 		WithTransferFn(pkg.PrepareDownloadFn(c)).
 		WithDeleteFn(pkg.PrepareFtpDeleteFn(c)).
@@ -67,22 +69,7 @@ func initFiles(server string, port int, user, passwd string) (tea.Model, error) 
 		if err != nil {
 			return nil, err
 		}
-		return pkg.MapSlice(files, func(f os.DirEntry) types.Entry {
-			var tp int
-			switch {
-			case f.IsDir():
-				tp = types.TypeDirectory
-			default:
-				tp = types.TypeFile
-			}
-
-			info, _ := f.Info()
-			return types.Entry{
-				Name: f.Name(),
-				Type: tp,
-				Size: uint64(info.Size()),
-			}
-		}), nil
+		return pkg.MapSlice(files, pkg.OsToEntry), nil
 	}).
 		WithTransferFn(pkg.PrepareUploadFn(c)).
 		WithDeleteFn(pkg.OsDeleteFn).
@@ -91,7 +78,7 @@ func initFiles(server string, port int, user, passwd string) (tea.Model, error) 
 	return filesModel{
 		source:      localList,
 		destination: serverList,
-		ftpClient:   c,
+		ftpModel:    ftpModel,
 	}, nil
 }
 
@@ -100,11 +87,20 @@ func (m filesModel) Init() tea.Cmd {
 }
 
 func (m filesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if err := m.ftpModel.ftpAliveError; err != nil {
+		cfg, _ := pkg.GetConfig()
+
+		return initMessage(
+			fmt.Sprintf("Connection with server lost: %s", err.Error()),
+			InitSavedConnections(cfg.Servers),
+			nil,
+		)
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
 		case key.Matches(msg, fKeys.Quit):
-			_ = m.ftpClient.Quit()
+			_ = m.Close()
 			return m, tea.Quit
 		case key.Matches(msg, fKeys.Down):
 			m.source.Down()
@@ -140,7 +136,7 @@ func (m filesModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				nil,
 				m.source.Delete,
 				func() {
-					_ = m.ftpClient.Quit()
+					_ = m.Close()
 				},
 			)
 		case key.Matches(msg, fKeys.Help):
@@ -156,7 +152,7 @@ func (m filesModel) sendMessage(message string) (tea.Model, tea.Cmd) {
 		m,
 		nil,
 		func() {
-			_ = m.ftpClient.Quit()
+			_ = m.Close()
 		},
 	)
 }
@@ -177,6 +173,11 @@ func (m filesModel) View() string {
 		),
 		help.New().View(fKeys),
 	)
+}
+
+func (m filesModel) Close() error {
+	m.ftpModel.keepAliveQuitChan <- struct{}{}
+	return m.ftpModel.client.Quit()
 }
 
 var fKeys = fKeyMap{
