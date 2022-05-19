@@ -1,8 +1,10 @@
 package pkg
 
 import (
+	"errors"
 	"io"
 	"io/fs"
+	"net/textproto"
 	"os"
 	"path"
 	"path/filepath"
@@ -94,7 +96,6 @@ func PrepareUploadFn(client *ftp.ServerConn) func(string, []types.Entry, string)
 func uploadDirWithContent(client *ftp.ServerConn, root, destination string, entry types.Entry) error {
 	return filepath.Walk(
 		path.Join(root, entry.Name),
-		// dir walker func
 		func(walkPath string, info fs.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -105,11 +106,19 @@ func uploadDirWithContent(client *ftp.ServerConn, root, destination string, entr
 			}
 			destinationAbs := path.Join(destination, rel)
 			if info.IsDir() {
-				return client.MakeDir(destinationAbs)
+				if err := client.MakeDir(destinationAbs); !isErrorDirExists(err) {
+					return err
+				}
+				return nil
 			}
-			// walkPath will be asbolute => remove root to make destination
+			// walkPath will be absolute => remove root to make destination
 			return uploadFile(client, walkPath, destinationAbs)
 		})
+}
+
+func isErrorDirExists(err error) bool {
+	var tpErr *textproto.Error
+	return errors.As(err, &tpErr) && tpErr.Code == ftp.StatusFileUnavailable
 }
 
 func uploadFile(c *ftp.ServerConn, source, destination string) error {
